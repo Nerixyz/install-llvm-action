@@ -4,6 +4,7 @@ import * as io from "@actions/io";
 import * as tc from "@actions/tool-cache";
 import * as fs from "fs";
 import * as path from "path";
+import fsPromises from "fs/promises";
 
 const ASSETS_JSON = fs.readFileSync(path.resolve(__dirname, "assets.json")).toString("utf-8");
 const ASSETS: Record<string, Record<string, Record<string, string>>> = JSON.parse(ASSETS_JSON);
@@ -118,19 +119,41 @@ const DEFAULT_NIX_DIRECTORY = "./llvm";
 const DEFAULT_WIN32_DIRECTORY = "C:/Program Files/LLVM";
 
 async function install(options: Options): Promise<void> {
-  const os = process.platform;
-  const { specificVersion, url } = getAsset(os, options);
+  const platform = process.platform;
+  const { specificVersion, url } = getAsset(platform, options);
   core.setOutput("version", specificVersion);
 
   console.log(`Installing LLVM and Clang ${options.version} (${specificVersion})...`);
   console.log(`Downloading and extracting '${url}'...`);
   const archive = await tc.downloadTool(url, "", options.auth ?? undefined);
 
-  let exit;
-  if (os === "win32") {
-    exit = await exec.exec("7z", ["x", archive, `-o${options.directory}`, "-y"]);
+  const directory = options.directory ?? "";
+
+  let exit = -1;
+  if (platform === "win32") {
+    if (url.endsWith(".msi")) {
+      // GitHub runners have older versions of LLVM installed.
+      // Make sure they're fully removed before we extract the msi.
+      await io.rmRF(directory).catch(() => {});
+
+      // Use directory inside the target to be able to use mv() later.
+      const extractDir = path.join(directory, "__extract");
+      await io.mkdirP(extractDir);
+      // msiexec doesn't like the default escaping, so do it manually.
+      exit = await exec.exec("msiexec", ["/a", `"${archive}"`, `TARGETDIR="${extractDir}"`, "/qn"], {
+        windowsVerbatimArguments: true,
+      });
+      // We will have the files in __extract/LLVM. Now we'd like to copy the files to the destination.
+      await Promise.all(
+        (await fsPromises.readdir(`${extractDir}/LLVM`)).map(subdir =>
+          io.mv(`${extractDir}/LLVM/${subdir}`, `${directory}/${subdir}`),
+        ),
+      );
+      await io.rmRF(extractDir);
+    } else {
+      exit = await exec.exec("7z", ["x", archive, `-o${options.directory}`, "-y"]);
+    }
   } else {
-    const directory = options.directory ?? "";
     await io.mkdirP(directory);
     exit = await exec.exec("tar", ["xf", archive, "-C", directory, "--strip-components=1"]);
   }

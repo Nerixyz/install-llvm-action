@@ -1,6 +1,7 @@
 import * as https from "https";
+import fs from 'fs/promises';
 
-import { Options, getAsset } from "./index";
+import { Options, getAsset, run } from "./index";
 
 async function test(os: string, options: Options): Promise<void> {
   const { specificVersion, url } = getAsset(os, options);
@@ -30,7 +31,8 @@ Expected at least two arguments:
   1. <os>
   2. <version>
   3. --arch=<arch> (optional)
-  4. --force-url=<force-url> (optional)`);
+  4. --force-url=<force-url> (optional)
+  5. --install (optional)`);
     process.exit(1);
   }
 
@@ -47,6 +49,7 @@ Expected at least two arguments:
       auth: null,
       env: false,
     };
+    let shouldInstall = false;
 
     for (const argument of process.argv.slice(start + 3)) {
       const [name, value] = argument.split("=");
@@ -57,6 +60,9 @@ Expected at least two arguments:
         case "--force-url":
           options.forceUrl = value;
           break;
+        case "--install":
+          shouldInstall = true;
+          break;
         default:
           console.error(`Invalid argument: ${argument}`);
           process.exit(1);
@@ -66,7 +72,16 @@ Expected at least two arguments:
 
     console.log(`Options: ${JSON.stringify(options, null, "  ")}`);
 
-    await test(os, options);
+    if (shouldInstall) {
+      const tmpdir = `${__dirname}/build/tmp`;
+      options.directory = `${__dirname}/build/out`;
+      await fs.mkdir(tmpdir, { recursive: true });
+      await fs.mkdir(options.directory, { recursive: true });
+      process.env['RUNNER_TEMP'] = tmpdir;
+      await run(options);
+    } else {
+      await test(os, options);
+    }
     process.exit(0);
   } catch (error: any) {
     console.error(error.stack);
